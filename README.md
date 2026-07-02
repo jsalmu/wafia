@@ -93,4 +93,4 @@ MIT — free to use, modify, and distribute.
 
 ---
 
-Built with [Claude.ai](https://claude.ai) 🤖
+
