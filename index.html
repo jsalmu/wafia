@@ -717,6 +717,20 @@ function buildCharts(income, ratios){
 /* ============ AUTH + INCOME LOGIC ============ */
 function fmt(n){ return Math.round(n).toLocaleString('ar-SA'); }
 
+/* ============ API CONFIG ============ */
+var API_URL = 'https://wafia-backend-production.up.railway.app';
+var wafiaToken = sessionStorage.getItem('wafia_token') || null;
+
+function apiCall(method, endpoint, body){
+  var opts = {
+    method: method,
+    headers: { 'Content-Type': 'application/json' }
+  };
+  if(wafiaToken) opts.headers['Authorization'] = 'Bearer ' + wafiaToken;
+  if(body) opts.body = JSON.stringify(body);
+  return fetch(API_URL + endpoint, opts).then(function(r){ return r.json(); });
+}
+
 function getUsers(){
   try { return JSON.parse(localStorage.getItem('wafia_users') || '{}'); }
   catch(e){ return {}; }
@@ -852,34 +866,77 @@ function doSignup(){
   hideError('signup-error');
   var name = document.getElementById('su-name').value.trim();
   if(!name){ showError('signup-error','الرجاء إدخال اسم المستخدم'); return; }
-  var users = getUsers();
-  if(users[name]){ showError('signup-error','اسم المستخدم هذا محجوز — جرّب اسماً آخر أو سجّل الدخول'); return; }
 
+  var income = 0;
   if(signupMode === 'manual'){
-    var income = parseFloat(document.getElementById('su-income').value);
+    income = parseFloat(document.getElementById('su-income').value);
     if(!income || income <= 0){ showError('signup-error','الرجاء إدخال راتب صحيح'); return; }
-    users[name] = { income: income, ratios: null, commitments: null };
-    saveUsers(users); localStorage.setItem('wafia_current_user', name);
-    pendingUser = { name: name, income: income };
-    showOnboarding(income);
-
   } else if(signupMode === 'bank'){
     if(!selectedBank){ showError('signup-error','الرجاء اختيار بنكك أولاً'); return; }
-    var income2 = parseFloat(document.getElementById('su-income-bank').value);
-    if(!income2 || income2 <= 0){ showError('signup-error','الرجاء إدخال راتب صحيح'); return; }
-    users[name] = { income: income2, ratios: null, commitments: null, dataSource: 'bank:'+selectedBank };
-    saveUsers(users); localStorage.setItem('wafia_current_user', name);
-    pendingUser = { name: name, income: income2 };
-    showFakeBankConnect(name, income2, selectedBank, users);
-
+    income = parseFloat(document.getElementById('su-income-bank').value);
+    if(!income || income <= 0){ showError('signup-error','الرجاء إدخال راتب صحيح'); return; }
   } else if(signupMode === 'csv'){
     if(!selectedCsvFile){ showError('signup-error','الرجاء رفع ملف CSV أولاً'); return; }
-    var income3 = parseFloat(document.getElementById('su-income-csv').value);
-    if(!income3 || income3 <= 0){ showError('signup-error','الرجاء إدخال راتب صحيح'); return; }
-    users[name] = { income: income3, ratios: null, commitments: null, dataSource: 'csv' };
-    saveUsers(users); localStorage.setItem('wafia_current_user', name);
-    pendingUser = { name: name, income: income3 };
-    showCsvResult(name, income3, parsedCsvCommitments, users);
+    income = parseFloat(document.getElementById('su-income-csv').value);
+    if(!income || income <= 0){ showError('signup-error','الرجاء إدخال راتب صحيح'); return; }
+  }
+
+  var btn = document.getElementById('su-btn');
+  var lbl = document.getElementById('su-btn-label');
+  btn.disabled = true;
+  lbl.textContent = 'جارٍ إنشاء الحساب...';
+
+  // Try real API first, fallback to localStorage
+  apiCall('POST', '/api/signup', { username: name, password: name + '_wafia', income: income })
+    .then(function(data){
+      btn.disabled = false;
+      lbl.textContent = signupMode === 'manual' ? 'إنشاء الحساب والدخول' : signupMode === 'bank' ? 'ربط الحساب والدخول' : 'تحليل الملف والدخول';
+
+      if(data.error){
+        // If name taken on server, check locally
+        if(data.error.includes('محجوز')){
+          showError('signup-error', data.error);
+          return;
+        }
+        // API not reachable — fall back to localStorage
+        signupLocalFallback(name, income);
+        return;
+      }
+
+      wafiaToken = data.token;
+      sessionStorage.setItem('wafia_token', wafiaToken);
+      localStorage.setItem('wafia_current_user', name);
+      pendingUser = { name: name, income: income };
+
+      if(signupMode === 'bank'){
+        showFakeBankConnect(name, income, selectedBank, {});
+      } else if(signupMode === 'csv'){
+        showCsvResult(name, income, parsedCsvCommitments, {});
+      } else {
+        showOnboarding(income);
+      }
+    })
+    .catch(function(){
+      btn.disabled = false;
+      lbl.textContent = 'إنشاء الحساب والدخول';
+      // API offline — use localStorage fallback
+      signupLocalFallback(name, income);
+    });
+}
+
+function signupLocalFallback(name, income){
+  var users = getUsers();
+  if(users[name]){ showError('signup-error','اسم المستخدم هذا محجوز'); return; }
+  users[name] = { income: income, ratios: null, commitments: null };
+  saveUsers(users);
+  localStorage.setItem('wafia_current_user', name);
+  pendingUser = { name: name, income: income };
+  if(signupMode === 'bank'){
+    showFakeBankConnect(name, income, selectedBank, users);
+  } else if(signupMode === 'csv'){
+    showCsvResult(name, income, parsedCsvCommitments, users);
+  } else {
+    showOnboarding(income);
   }
 }
 
@@ -1026,27 +1083,71 @@ function generateSmartCommitments(income){
 function doLogin(){
   hideError('login-error');
   var name = document.getElementById('li-name').value.trim();
+  var passEl = document.getElementById('li-pass');
+  var pass = passEl ? passEl.value : (name + '_wafia'); // auto-password if field hidden
 
   if(!name){ showError('login-error','الرجاء إدخال الاسم'); return; }
 
-  var users = getUsers();
-  if(!users[name]){ showError('login-error','لا يوجد حساب بهذا الاسم — جرّب إنشاء حساب جديد'); return; }
+  var btn = document.querySelector('#login-form button');
+  if(btn){ btn.disabled = true; btn.textContent = 'جارٍ الدخول...'; }
 
-  localStorage.setItem('wafia_current_user', name);
-  if(users[name].ratios){
-    enterDashboard(name, users[name].income, users[name].ratios, users[name].commitments);
-  } else {
-    pendingUser = { name: name, income: users[name].income };
-    showOnboarding(users[name].income);
-  }
+  apiCall('POST', '/api/login', { username: name, password: pass || name + '_wafia' })
+    .then(function(data){
+      if(btn){ btn.disabled = false; btn.textContent = 'دخول'; }
+
+      if(data.error){
+        // Try localStorage fallback
+        var users = getUsers();
+        if(!users[name]){
+          showError('login-error', 'لا يوجد حساب بهذا الاسم — جرّب إنشاء حساب جديد');
+          return;
+        }
+        localStorage.setItem('wafia_current_user', name);
+        if(users[name].ratios){
+          enterDashboard(name, users[name].income, users[name].ratios, users[name].commitments);
+        } else {
+          pendingUser = { name: name, income: users[name].income };
+          showOnboarding(users[name].income);
+        }
+        return;
+      }
+
+      wafiaToken = data.token;
+      sessionStorage.setItem('wafia_token', wafiaToken);
+      localStorage.setItem('wafia_current_user', name);
+
+      var u = data.user;
+      if(u.ratios && u.ratios.locked){
+        enterDashboard(name, u.income, u.ratios, u.commitments);
+      } else {
+        pendingUser = { name: name, income: u.income };
+        showOnboarding(u.income);
+      }
+    })
+    .catch(function(){
+      if(btn){ btn.disabled = false; btn.textContent = 'دخول'; }
+      // API offline — localStorage fallback
+      var users = getUsers();
+      if(!users[name]){ showError('login-error','لا يوجد حساب بهذا الاسم'); return; }
+      localStorage.setItem('wafia_current_user', name);
+      if(users[name].ratios){
+        enterDashboard(name, users[name].income, users[name].ratios, users[name].commitments);
+      } else {
+        pendingUser = { name: name, income: users[name].income };
+        showOnboarding(users[name].income);
+      }
+    });
 }
 
 function doLogout(){
+  wafiaToken = null;
+  sessionStorage.removeItem('wafia_token');
   localStorage.removeItem('wafia_current_user');
   document.getElementById('dash-screen').style.display = 'none';
   document.getElementById('onboard-screen').style.display = 'none';
   document.getElementById('auth-screen').style.display = 'flex';
   document.getElementById('li-name').value = '';
+  populateNameList();
 }
 
 /* ============ ONBOARDING ============ */
@@ -1259,11 +1360,18 @@ function finishOnboarding(){
 
   var ratios = { locked: locked, bills: bills, free: free };
 
+  // Save to API (and localStorage as fallback)
   var users = getUsers();
-  if(pendingUser && users[pendingUser.name]){
+  if(pendingUser){
+    if(!users[pendingUser.name]) users[pendingUser.name] = { income: pendingUser.income };
     users[pendingUser.name].ratios = ratios;
     users[pendingUser.name].commitments = commitments;
     saveUsers(users);
+
+    if(wafiaToken){
+      apiCall('PUT', '/api/user/data', { income: pendingUser.income, ratios: ratios, commitments: commitments })
+        .catch(function(){ /* silent fail — localStorage is backup */ });
+    }
   }
 
   document.getElementById('onboard-screen').style.display = 'none';
