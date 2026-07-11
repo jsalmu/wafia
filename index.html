@@ -144,6 +144,11 @@ body{font-family:-apple-system,'Segoe UI',Tahoma,Arial,sans-serif;background:lin
           <input id="su-name" type="text" placeholder="مثال: sami_2025" style="width:100%;padding:10px 12px;border:.5px solid var(--bds);border-radius:8px;font-size:13px;background:var(--s0);color:var(--tp);font-family:inherit;direction:ltr;text-align:right">
           <div style="font-size:10px;color:var(--tm);margin-top:5px">سيُستخدم هذا الاسم لتسجيل الدخول لاحقاً</div>
         </div>
+        <div style="margin-bottom:14px">
+          <label style="font-size:12px;color:var(--ts);display:block;margin-bottom:6px">كلمة المرور</label>
+          <input id="su-pass" type="password" placeholder="8 أحرف على الأقل" style="width:100%;padding:10px 12px;border:.5px solid var(--bds);border-radius:8px;font-size:13px;background:var(--s0);color:var(--tp);font-family:inherit">
+          <div style="font-size:10px;color:var(--tm);margin-top:5px">يجب ألا تقل عن 8 أحرف</div>
+        </div>
 
         <!-- Mode toggle — 3 options -->
         <div style="display:flex;gap:3px;background:rgba(0,0,0,.25);border-radius:9px;padding:3px;margin-bottom:16px">
@@ -214,10 +219,14 @@ body{font-family:-apple-system,'Segoe UI',Tahoma,Arial,sans-serif;background:lin
 
       <!-- Login form -->
       <div id="login-form" style="display:none">
-        <div style="margin-bottom:18px">
+        <div style="margin-bottom:14px">
           <label style="font-size:12px;color:var(--ts);display:block;margin-bottom:6px">اسم المستخدم</label>
           <input id="li-name" type="text" list="li-name-list" placeholder="اختر اسمك من القائمة أو اكتبه" style="width:100%;padding:10px 12px;border:.5px solid var(--bds);border-radius:8px;font-size:13px;background:var(--s0);color:var(--tp);font-family:inherit;direction:ltr;text-align:right">
           <datalist id="li-name-list"></datalist>
+        </div>
+        <div style="margin-bottom:18px">
+          <label style="font-size:12px;color:var(--ts);display:block;margin-bottom:6px">كلمة المرور</label>
+          <input id="li-pass" type="password" placeholder="••••••••" style="width:100%;padding:10px 12px;border:.5px solid var(--bds);border-radius:8px;font-size:13px;background:var(--s0);color:var(--tp);font-family:inherit">
         </div>
         <div id="login-error" style="display:none;color:var(--tda);font-size:12px;margin-bottom:12px"></div>
         <button onclick="doLogin()" style="width:100%;padding:11px;border:none;border-radius:8px;background:var(--fa);color:#fffdfc;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">دخول</button>
@@ -881,13 +890,16 @@ function doSignup(){
     if(!income || income <= 0){ showError('signup-error','الرجاء إدخال راتب صحيح'); return; }
   }
 
+  var pass = document.getElementById('su-pass') ? document.getElementById('su-pass').value : '';
+  if(!pass || pass.length < 8){ showError('signup-error','كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return; }
+
   var btn = document.getElementById('su-btn');
   var lbl = document.getElementById('su-btn-label');
   btn.disabled = true;
   lbl.textContent = 'جارٍ إنشاء الحساب...';
 
   // Try real API first, fallback to localStorage
-  apiCall('POST', '/api/signup', { username: name, password: name + '_wafia', income: income })
+  apiCall('POST', '/api/signup', { username: name, password: pass, income: income })
     .then(function(data){
       btn.disabled = false;
       lbl.textContent = signupMode === 'manual' ? 'إنشاء الحساب والدخول' : signupMode === 'bank' ? 'ربط الحساب والدخول' : 'تحليل الملف والدخول';
@@ -927,7 +939,8 @@ function doSignup(){
 function signupLocalFallback(name, income){
   var users = getUsers();
   if(users[name]){ showError('signup-error','اسم المستخدم هذا محجوز'); return; }
-  users[name] = { income: income, ratios: null, commitments: null };
+  var pass = document.getElementById('su-pass') ? document.getElementById('su-pass').value : name + '_wafia';
+  users[name] = { income: income, ratios: null, commitments: null, pass: pass };
   saveUsers(users);
   localStorage.setItem('wafia_current_user', name);
   pendingUser = { name: name, income: income };
@@ -1084,24 +1097,23 @@ function doLogin(){
   hideError('login-error');
   var name = document.getElementById('li-name').value.trim();
   var passEl = document.getElementById('li-pass');
-  var pass = passEl ? passEl.value : (name + '_wafia'); // auto-password if field hidden
+  var pass = passEl ? passEl.value : '';
 
-  if(!name){ showError('login-error','الرجاء إدخال الاسم'); return; }
+  if(!name){ showError('login-error','الرجاء إدخال اسم المستخدم'); return; }
+  if(!pass){ showError('login-error','الرجاء إدخال كلمة المرور'); return; }
 
   var btn = document.querySelector('#login-form button');
   if(btn){ btn.disabled = true; btn.textContent = 'جارٍ الدخول...'; }
 
-  apiCall('POST', '/api/login', { username: name, password: pass || name + '_wafia' })
+  apiCall('POST', '/api/login', { username: name, password: pass })
     .then(function(data){
       if(btn){ btn.disabled = false; btn.textContent = 'دخول'; }
 
       if(data.error){
         // Try localStorage fallback
         var users = getUsers();
-        if(!users[name]){
-          showError('login-error', 'لا يوجد حساب بهذا الاسم — جرّب إنشاء حساب جديد');
-          return;
-        }
+        if(!users[name]){ showError('login-error', 'لا يوجد حساب بهذا الاسم'); return; }
+        if(users[name].pass && users[name].pass !== pass){ showError('login-error', 'كلمة المرور غير صحيحة'); return; }
         localStorage.setItem('wafia_current_user', name);
         if(users[name].ratios){
           enterDashboard(name, users[name].income, users[name].ratios, users[name].commitments);
@@ -1126,9 +1138,9 @@ function doLogin(){
     })
     .catch(function(){
       if(btn){ btn.disabled = false; btn.textContent = 'دخول'; }
-      // API offline — localStorage fallback
       var users = getUsers();
       if(!users[name]){ showError('login-error','لا يوجد حساب بهذا الاسم'); return; }
+      if(users[name].pass && users[name].pass !== pass){ showError('login-error','كلمة المرور غير صحيحة'); return; }
       localStorage.setItem('wafia_current_user', name);
       if(users[name].ratios){
         enterDashboard(name, users[name].income, users[name].ratios, users[name].commitments);
@@ -1147,6 +1159,8 @@ function doLogout(){
   document.getElementById('onboard-screen').style.display = 'none';
   document.getElementById('auth-screen').style.display = 'flex';
   document.getElementById('li-name').value = '';
+  var passEl = document.getElementById('li-pass');
+  if(passEl) passEl.value = '';
   populateNameList();
 }
 
